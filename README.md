@@ -1,4 +1,4 @@
-# pathforge-visionx
+# Nexus
 
 AI-Adaptive Onboarding Engine - Team VisionX
 
