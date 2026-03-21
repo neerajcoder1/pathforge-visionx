@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Sequence, Set
 
 import networkx as nx
 from groq import Groq
+from rapidfuzz import fuzz, process
 
 from backend.api.schemas import CourseModule, PaceResult, PathVariant, SkillMastery
 from backend.engine.bkt import BKTModel
@@ -20,6 +21,9 @@ from backend.extraction.entity_linker import link_to_esco
 from backend.extraction.extractor import extract_skills
 from backend.trace.justifier import render_justifications
 from backend.trace.ledger import write_ledger
+
+
+FUZZY_MATCH_THRESHOLD = 78
 
 
 def _decompose_jd_skills(jd_text: str) -> list[str]:
@@ -57,21 +61,53 @@ def _decompose_jd_skills(jd_text: str) -> list[str]:
 	return skills
 
 
+def _map_jd_tokens_to_uris(tokens: Sequence[str], alias_table: Dict[str, str]) -> list[str]:
+	"""Map JD tokens to ESCO URIs using fuzzy matching with a conservative threshold."""
+	normalized_aliases = {str(k).strip().lower(): str(v).strip() for k, v in (alias_table or {}).items() if str(k).strip()}
+	resolved: list[str] = []
+	choices = list(normalized_aliases.keys())
+	for token in tokens:
+		norm = token.strip().lower()
+		if not norm:
+			continue
+		if norm in normalized_aliases:
+			resolved.append(normalized_aliases[norm])
+			continue
+		if choices:
+			best = process.extractOne(norm, choices, scorer=fuzz.WRatio)
+			if best and best[1] >= FUZZY_MATCH_THRESHOLD:
+				resolved.append(normalized_aliases.get(best[0], norm))
+	if not resolved:
+		return [normalized_aliases.get(t.strip().lower(), t.strip().lower()) for t in tokens if t.strip()]
+	# Preserve order while removing duplicates.
+	seen: set[str] = set()
+	ordered: list[str] = []
+	for uri in resolved:
+		if uri and uri not in seen:
+			seen.add(uri)
+			ordered.append(uri)
+	return ordered
+
+
 def _mastery_to_schema(matrix: Dict[str, dict]) -> list[SkillMastery]:
 	items: list[SkillMastery] = []
 	for skill_id, row in matrix.items():
 		if skill_id.startswith("_"):
 			continue
+		p_m = float(row.get("p_m", 0.2))
+		p_l0 = float(row.get("p_l0", p_m))
+		ci_lower = float(row.get("ci_lower", 0.0))
+		ci_upper = float(row.get("ci_upper", 1.0))
 		items.append(
 			SkillMastery(
 				esco_uri=skill_id,
 				label=str(row.get("label", skill_id)),
-				p_m=float(row.get("p_m", 0.2)),
-				p_l0=float(row.get("p_l0", row.get("p_m", 0.2))),
-				ci_lower=float(row.get("ci_lower", 0.0)),
-				ci_upper=float(row.get("ci_upper", 1.0)),
-				ci_color=str(row.get("ci_color", "red")),
-				evidence=str(row.get("evidence", "")),
+				p_m=p_m,
+				p_l0=p_l0,
+				ci_lower=max(0.0, min(1.0, ci_lower)),
+				ci_upper=max(max(0.0, min(1.0, ci_upper)), max(0.0, min(1.0, ci_lower))),
+				ci_color=str(row.get("ci_color") or "green"),
+				evidence=str(row.get("evidence") or "Extracted from text"),
 			)
 		)
 	return items
@@ -138,24 +174,98 @@ def _compute_cvs(path: list[CourseModule], target_skills: set[str]) -> float:
 	return float(max(0.0, min(1.0, 0.7 * coverage + 0.3 * (1.0 / (1.0 + total_hours / 40.0)))))
 
 
+def _skill_name(item: Any) -> str:
+	if isinstance(item, dict):
+		return str(item.get("name") or item.get("mention") or item.get("label") or item)
+	return str(getattr(item, "name", getattr(item, "mention", getattr(item, "label", item))))
+
+
+def _build_target_mastery(
+	target_skill_ids: set[str],
+	matrix: Dict[str, dict],
+	graph: nx.DiGraph,
+) -> list[SkillMastery]:
+	"""Build target skill rows from JD/gap set directly, even when current mastery is sparse."""
+	rows: list[SkillMastery] = []
+	for skill_id in sorted(target_skill_ids):
+		row = matrix.get(skill_id, {})
+		node = graph.nodes.get(skill_id, {}) if skill_id in graph else {}
+		label = str(node.get("label", row.get("label", skill_id)))
+		p_m = float(row.get("p_m", 0.0))
+		ci_lower = float(row.get("ci_lower", max(0.0, p_m - 0.2)))
+		ci_upper = float(row.get("ci_upper", min(1.0, p_m + 0.2)))
+		rows.append(
+			SkillMastery(
+				esco_uri=skill_id,
+				label=label,
+				p_m=p_m,
+				p_l0=float(row.get("p_l0", p_m)),
+				ci_lower=max(0.0, min(1.0, ci_lower)),
+				ci_upper=max(max(0.0, min(1.0, ci_upper)), max(0.0, min(1.0, ci_lower))),
+				ci_color=str(row.get("ci_color") or "green"),
+				evidence=str(row.get("evidence") or "Extracted from text"),
+			)
+		)
+	return rows
+
+
+def _fallback_linked_skills_from_resume(
+	resume_text: str,
+	alias_table: Dict[str, str],
+	graph: nx.DiGraph,
+) -> list[SkillMastery]:
+	"""Derive a weak prior from resume text when extractor output is empty."""
+	resume_tokens = _decompose_jd_skills(resume_text)
+	if not resume_tokens:
+		return []
+
+	resolved_uris = _map_jd_tokens_to_uris(resume_tokens, alias_table)
+	fallback_ids = list(dict.fromkeys(resolved_uris or resume_tokens))
+	seed: list[SkillMastery] = []
+	for skill_id in fallback_ids[:30]:
+		node = graph.nodes.get(skill_id, {}) if skill_id in graph else {}
+		label = str(node.get("label", skill_id))
+		seed.append(
+			SkillMastery(
+				esco_uri=skill_id,
+				label=label,
+				p_m=0.20,
+				p_l0=0.20,
+				ci_lower=0.0,
+				ci_upper=0.4,
+				ci_color="green",
+				evidence="Extracted from text",
+			)
+		)
+	return seed
+
+
 def run_pace(resume_text: str, jd_text: str, graph: nx.DiGraph, db_conn: Any) -> PaceResult:
 	"""Run end-to-end PACE pipeline and return a complete schema-validated result."""
 	session_id = str(uuid.uuid4())
 
 	# a) Resume skill extraction
 	mentions = extract_skills(resume_text)
+	print(f"Extracted Resume Skills: [{', '.join(_skill_name(s) for s in mentions)}]", flush=True)
 
 	# b) ESCO linking
 	alias_table = graph.graph.get("alias_table", {})
 	linked_skills = link_to_esco(mentions, graph, alias_table)
+	if not linked_skills:
+		linked_skills = _fallback_linked_skills_from_resume(resume_text, alias_table, graph)
+	print(f"Linked Resume Skills Count: {len(linked_skills)}", flush=True)
 
 	# c) BKT initialization
 	bkt = BKTModel()
 	matrix = bkt.initialize(linked_skills)
 
-	# d) JD decomposition (one Groq attempt per session, then fallback)
-	jd_tokens = _decompose_jd_skills(jd_text)
-	jd_skill_uris = [alias_table.get(token, token) for token in jd_tokens]
+	# d) JD extraction (directly from jd_text), then decomposition fallback if empty
+	jd_mentions = extract_skills(jd_text)
+	jd_tokens = [str(getattr(m, "mention", "")).strip().lower() for m in jd_mentions if str(getattr(m, "mention", "")).strip()]
+	if not jd_tokens:
+		jd_tokens = _decompose_jd_skills(jd_text)
+	print(f"Extracted JD Skills: [{', '.join(jd_tokens)}]", flush=True)
+	jd_skill_uris = _map_jd_tokens_to_uris(jd_tokens, alias_table)
 
 	# e) Gap discovery via upstream BFS
 	target_gap_set = _gap_discovery(jd_skill_uris, matrix, graph)
@@ -244,7 +354,7 @@ def run_pace(resume_text: str, jd_text: str, graph: nx.DiGraph, db_conn: Any) ->
 
 	# n) Return complete PaceResult
 	current_mastery = _mastery_to_schema(matrix)
-	target_mastery = [m for m in current_mastery if m.esco_uri in target_skills] if target_skills else []
+	target_mastery = _build_target_mastery(target_skills, matrix, graph) if target_skills else []
 	return PaceResult(
 		session_id=session_id,
 		current_mastery=current_mastery,

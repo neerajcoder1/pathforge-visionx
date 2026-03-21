@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 venv/
 .env
+frontend/node_modules/
+
+Grok API.txt

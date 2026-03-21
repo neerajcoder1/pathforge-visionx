@@ -35,13 +35,25 @@ def verify_path(path: List[Any], catalog_ids: Set[str], graph: nx.DiGraph) -> Di
 		if not in_catalog:
 			return _fail("CATALOG_MEMBERSHIP", module_id)
 
-	# Rule 2: PREREQUISITE_SATISFIED (P(M) > 0.85)
+	# Rule 2: PREREQUISITE_SATISFIED
+	# A module is valid only when prerequisites for each taught skill were covered
+	# by earlier modules in the path (or in the same module as co-taught skills).
+	covered_skills: set[str] = set()
 	for module in path:
 		module_id = str(_get_value(module, "course_id", ""))
-		prereq_mastery = _get_value(module, "prerequisite_mastery", {}) or {}
-		for _, p_m in prereq_mastery.items():
-			if float(p_m) <= 0.85:
-				return _fail("PREREQUISITE_SATISFIED", module_id)
+		teaches = [str(s) for s in (_get_value(module, "teaches", []) or [])]
+		teaches_set = set(teaches)
+		for taught_skill in teaches:
+			if taught_skill not in graph:
+				continue
+			for prereq in graph.predecessors(taught_skill):
+				edge_data = graph.get_edge_data(prereq, taught_skill, default={})
+				relation = str(edge_data.get("relation", "")).upper()
+				if relation != "PREREQUISITE_OF":
+					continue
+				if prereq not in covered_skills and prereq not in teaches_set:
+					return _fail("PREREQUISITE_SATISFIED", module_id)
+		covered_skills.update(teaches_set)
 
 	# Rule 3: NO_CYCLES over prerequisite subgraph induced by path taught skills.
 	skill_nodes: set[str] = set()

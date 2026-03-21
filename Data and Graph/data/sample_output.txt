@@ -1,0 +1,11 @@
+Graph stats: 100 nodes, 199 edges
+Number of courses: 100
+Embeddings info: Generated using sentence-transformers API (intfloat/multilingual-e5-large)
+Top 5 matched courses for 'machine learning':
+Result 1: Introduction to Data and Graph Engineering 21 (Skills: ["esco:30", "esco:54"]) - Score: 0.8069
+Result 2: Introduction to Data and Graph Engineering 9 (Skills: ["esco:78", "esco:51"]) - Score: 0.8067
+Result 3: Introduction to Data and Graph Engineering 10 (Skills: ["esco:67", "esco:99", "esco:52", "esco:7", "esco:3"]) - Score: 0.8063
+Result 4: Introduction to Data and Graph Engineering 44 (Skills: ["esco:54", "esco:67", "esco:31"]) - Score: 0.8063
+Result 5: Introduction to Data and Graph Engineering 29 (Skills: ["esco:34", "esco:44", "esco:58"]) - Score: 0.8062
+Redis mock status: 5 items stored successfully
+Final SUCCESS message: Pipeline execution complete and demo ready.

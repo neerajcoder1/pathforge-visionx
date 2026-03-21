@@ -1,3 +1,17 @@
+networkx>=3.0
+psycopg2-binary>=2.9.9
+pgvector>=0.2.4
+sentence-transformers>=2.2.2
+redis>=5.0.1
+SQLAlchemy>=2.0.23
+pandas>=2.1.4
+numpy>=1.26.2
 fastapi
 uvicorn
 python-multipart
+groq
+z3-solver
+pdfplumber
+pytesseract
+rapidfuzz
+pypdfium2

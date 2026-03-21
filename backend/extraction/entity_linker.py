@@ -22,6 +22,7 @@ PROFICIENCY_PRIORS = {
 HIGH_TERMS = {"architected", "led", "designed", "expert", "principal"}
 MID_TERMS = {"built", "developed", "proficient", "experienced", "senior"}
 LOW_TERMS = {"familiar", "basic", "exposure", "learning"}
+FUZZY_MATCH_THRESHOLD = 78
 
 
 def _normalize(text: str) -> str:
@@ -56,18 +57,51 @@ def _ann_lookup(graph: nx.DiGraph, mention: str) -> Optional[str]:
 	return None
 
 
+def _build_runtime_aliases(graph: nx.DiGraph) -> Dict[str, str]:
+	"""Build aliases from graph node attributes to improve linker coverage."""
+	aliases: dict[str, str] = {}
+	for node_id, node_data in graph.nodes(data=True):
+		nid = str(node_id).strip()
+		if not nid:
+			continue
+		aliases[_normalize(nid)] = nid
+		for key in ("label", "name", "preferredLabel", "title"):
+			value = str(node_data.get(key, "")).strip()
+			if value:
+				aliases[_normalize(value)] = nid
+	return aliases
+
+
 def _resolve_uri(mention: str, alias_table: Dict[str, str], graph: nx.DiGraph) -> Optional[str]:
 	normalized = _normalize(mention)
 	if not normalized:
 		return None
-	if normalized in alias_table:
-		return alias_table[normalized]
 
-	choices = list(alias_table.keys())
+	runtime_aliases = _build_runtime_aliases(graph)
+	merged_aliases: dict[str, str] = dict(runtime_aliases)
+	for k, v in (alias_table or {}).items():
+		alias_key = _normalize(str(k))
+		if not alias_key:
+			continue
+		candidate = str(v).strip()
+		if candidate in graph:
+			merged_aliases[alias_key] = candidate
+			continue
+		candidate_norm = _normalize(candidate)
+		if candidate_norm in runtime_aliases:
+			merged_aliases[alias_key] = runtime_aliases[candidate_norm]
+
+	if normalized in runtime_aliases:
+		return runtime_aliases[normalized]
+
+	if normalized in merged_aliases:
+		return merged_aliases[normalized]
+
+	choices = list(merged_aliases.keys())
 	if choices:
 		best = process.extractOne(normalized, choices, scorer=fuzz.WRatio)
-		if best and best[1] >= 85:
-			return alias_table.get(best[0])
+		if best and best[1] >= FUZZY_MATCH_THRESHOLD:
+			return merged_aliases.get(best[0])
 
 	# pgvector ANN fallback hook.
 	return _ann_lookup(graph, mention)
@@ -102,7 +136,7 @@ def link_to_esco(mentions: List[Any], graph: nx.DiGraph, alias_table: dict) -> L
 				ci_lower=max(0.0, p_l0 - ci_half),
 				ci_upper=min(1.0, p_l0 + ci_half),
 				ci_color="amber",
-				evidence=mention,
+				evidence=mention or "Extracted from text",
 			)
 		)
 
