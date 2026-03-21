@@ -1,89 +1,200 @@
 # NEXUS
 
-## AI-Adaptive Onboarding Engine - Team VisionX
+Z3-verified, adaptive onboarding intelligence for role-specific learning paths.
 
-### 🔧 Backend (Member 3 – API & Integration)
+## Problem Statement
 
-### 🚀 Tech Stack
+Traditional onboarding is static: same modules, same sequence, same time cost for radically different people. NEXUS solves this by generating personalized pathways that are:
 
-- FastAPI
-- Python
-- Uvicorn
-- Server-Sent Events (SSE)
+- Grounded in a real skills ontology.
+- Constrained by prerequisite logic.
+- Measured by explicit mastery math.
+- Formally verified before delivery.
 
----
+The target outcome is higher Competency Velocity Score (CVS): greater mastery gain per hour than legacy one-size-fits-all onboarding.
 
-### 📡 API Endpoints
-
-#### 1. Upload Resume
-
-`POST /api/upload-resume`
-
-- Uploads user resume
-- Generates session ID
-- Stores data for further processing
-
----
-
-#### 2. Analyze (Streaming)
-
-`POST /api/analyze`
-
-- Processes resume + job description
-- Streams intermediate steps:
-  - Mastery mapping
-  - Path generation
-  - Final result
-- Uses SSE for real-time feedback
-
----
-
-#### 3. Quiz Result
-
-`POST /api/quiz-result`
-
-- Evaluates user answers
-- Returns score
-- (Future: updates mastery model)
-
----
-
-#### 4. Demo Endpoint (Fallback)
-
-`GET /api/demo/{id}`
-
-- Returns pre-defined results
-- Ensures smooth demo even if AI fails
-
----
-
-### ⚡ Key Features
-
-- 🔄 Streaming API (low latency experience)
-- 🧠 Session-based architecture
-- 🔗 Modular integration with engine & frontend
-- 🛟 Fault-tolerant demo system
-
----
-
-### ▶️ How to Run
+## One-Command Setup
 
 ```bash
-pip install fastapi uvicorn python-multipart
-uvicorn backend.api.main:app --reload
+docker compose up --build
 ```
 
-### 🌐 API Docs
+This boots the full stack and serves the application for demo use.
 
-After running the backend:
+## System Architecture
 
-http://127.0.0.1:8000/docs
+```mermaid
+flowchart TB
+   subgraph C[Client: Next.js 15 + Tailwind + Recharts + Framer Motion + react-flow-renderer]
+    V1[Skill Radar]
+    V2[Three-Tab Pareto]
+    V3[Reasoning Trace]
+    V4[HR Dashboard]
+   end
 
-### 🧩 Contribution (Member 3)
+   C -->|HTTPS + SSE| API[FastAPI 0.115 + Pydantic v2\nSchema validation + streaming]
 
-- Designed and implemented backend API
-- Integrated upload, analyze, quiz, and demo modules
-- Implemented real-time streaming using SSE
-- Managed session flow across endpoints
+   API --> EX[Extraction Service\nPhi-4-mini + pdfplumber + Tesseract]
+   API --> PE[PACE Engine\nBKT + Masked Action Space + Pareto x3 + Z3]
+   API --> TR[Trace Service\nDecision Ledger + Provenance]
+   API --> JU[Justification Service\nQwen-2.5-7B]
 
-##### Note: The system is optimized for quick local setup for hackathon demo. Docker support can be added for production deployment.
+   EX --> DL
+   PE --> DL
+   TR --> DL
+   JU --> DL
+
+   subgraph DL[Data Layer]
+    G[NetworkX ESCO graph in memory\n~13,890 skills + edges]
+    P[(PostgreSQL + pgvector)]
+    R[(Redis cache)]
+   end
+
+   API --> LLM[Groq APIs]
+   LLM --> FB[Ollama fallback]
+```
+
+## Core Logic: PACE Engine
+
+NEXUS planning is deterministic and auditable:
+
+1. Extract skills from resume and JD.
+2. Link entities to ESCO skill nodes.
+3. Initialize mastery matrix with BKT priors.
+4. Build eligible modules using masked action space: block modules with unmet prerequisites.
+5. Score eligible modules with multi-objective reward:
+
+  - Speed path: \(\lambda = 2.0\)
+  - Balance path: \(\lambda = 1.0\)
+  - Depth path: \(\lambda = 0.2\)
+
+6. Verify each generated path with Z3.
+7. Stream paths and trace to UI.
+
+## BKT Mechanics
+
+For each skill \(k\), NEXUS tracks:
+
+- \(P(L0_k)\): initial mastery.
+- \(P(T_k)\): transition probability.
+- \(P(S_k)\): slip probability.
+- \(P(G_k)\): guess probability.
+
+Posterior updates after evidence:
+
+$$
+P(L\mid correct)=\frac{P(L)(1-P(S))}{P(L)(1-P(S)) + (1-P(L))P(G)}
+$$
+
+$$
+P(L\mid incorrect)=\frac{P(L)P(S)}{P(L)P(S) + (1-P(L))(1-P(G))}
+$$
+
+Transition after learning action:
+
+$$
+P(M_k)=P(L_k)+(1-P(L_k))P(T_k)
+$$
+
+### Worked Example (Docker Skill)
+
+From the PRD scenario:
+
+- Initial mastery from extraction and recency: \(P(L)=0.32\)
+- Evidence update raises latent mastery to \(P(L)=0.554\)
+- Foundational transition probability \(P(T)=0.35\)
+
+Then:
+
+$$
+P(M)=0.554 + (1-0.554)\cdot 0.35
+=0.554 + 0.1561
+=0.7101 \approx 0.71
+$$
+
+So the module moves Docker mastery from 0.32 baseline to approximately 0.71 projected mastery.
+
+## Formal Verification with Z3
+
+NEXUS checks every candidate path against four hard rules:
+
+1. CATALOG_MEMBERSHIP
+  - Every selected module id must exist in catalog.
+2. PREREQUISITE_SATISFIED
+  - For each module, all prerequisite skills must satisfy mastery threshold \(P(M) > 0.85\).
+3. NO_CYCLES
+  - The prerequisite subgraph over selected modules must be acyclic (topological ordering exists).
+4. COMPLIANCE_MANDATORY
+  - Every mandatory module must be included.
+
+### Proof Sketch for Reliability
+
+If all four constraints hold, then:
+
+- No non-catalog module can appear in output.
+- No module can appear before unmet prerequisites.
+- No cyclic dependency can break execution order.
+- No mandatory compliance requirement can be bypassed.
+
+Therefore, path validity is not heuristic; it is solver-validated.
+
+## Evaluation Lens
+
+- Competency Velocity Score:
+
+$$
+CVS=\frac{\sum_k \Delta P(M_k)}{\text{Total Path Hours}}
+$$
+
+- Legacy baseline is computed from catalog-derived static sequence, then compared directly to NEXUS paths.
+
+## Dataset Sources and License Notes
+
+1. ESCO v1.2
+  - Source: European Commission Open Data Portal.
+  - Use: primary skill graph, multilingual labels, prerequisite and similarity structure.
+  - License note: open public data from EC portal (cite official ESCO source in submissions).
+
+2. O*NET 28.0
+  - Source: O*NET / U.S. Department of Labor public releases.
+  - Use: importance-derived criticality weights for reward scoring.
+  - License note: free/public distribution under O*NET terms.
+
+3. ESCO-O*NET Crosswalk
+  - Source: official mapping on ESCO portal.
+  - Use: interoperability between ESCO and O*NET skill semantics.
+  - License note: follow source attribution requirements from official crosswalk publication.
+
+4. Synthetic corpora (resumes, JDs, course catalog)
+  - Use: controlled stress-testing, negative sampling, and hackathon demo simulation.
+  - License note: internally generated simulation data; explicitly labeled as training/demo simulation.
+
+## Honest Limitations
+
+1. Parameter calibration is still domain-sensitive.
+  - BKT defaults are principled but may require organization-specific tuning.
+
+2. Catalog coverage governs output quality.
+  - If required skills have no mapped modules, NEXUS must surface external resource required gaps.
+
+3. Emerging tools may be underrepresented in ontology.
+  - Entity linking can miss novel or niche skills outside ESCO/O*NET overlays.
+
+4. Extraction quality depends on document quality.
+  - Image-heavy or unusual resume layouts can reduce confidence despite OCR fallback.
+
+5. NEXUS plans; it does not claim autonomous RL learning.
+  - Adaptation is via BKT posterior updates and constrained replanning, not online policy learning.
+
+## Why This Is Competition-Strong
+
+- Technical depth without black-box dependence.
+- Explainability for both technical and HR audiences.
+- Formal verification for reliability claims.
+- Demo-safe architecture with caching and fallback.
+
+## Quick Access
+
+- Application UI: http://localhost:3000
+- API docs: http://localhost:8000/docs
+
