@@ -1,4 +1,4 @@
-# Nexus
+# NEXUS
 
 ## AI-Adaptive Onboarding Engine - Team VisionX
 
