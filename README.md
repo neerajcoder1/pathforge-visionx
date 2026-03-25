@@ -1,4 +1,5 @@
 # NEXUS
+# video - https://drive.google.com/file/d/1uRhj1Lbi23cG2W4VIdGyhBCFZeNqKmq5/view?usp=drivesdk
 
 Z3-verified, adaptive onboarding intelligence for role-specific learning paths.
 
